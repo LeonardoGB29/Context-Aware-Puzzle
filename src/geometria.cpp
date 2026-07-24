@@ -1,5 +1,3 @@
-// geometria.cpp — implementaciones
-
 #include "geometria.hpp"
 #include <algorithm>
 #include <cmath>

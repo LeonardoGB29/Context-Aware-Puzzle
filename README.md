@@ -6,10 +6,25 @@ de Ruzić & Pižurica para *organizar* las piezas por textura antes de armarlas.
 
 ```
 make            # compila generator y solver
-./build/generator [imagen] [r]   # corta la imagen en piezas
-./build/solver                   # rearma la imagen
-make clean      # borra build/ y data/pieces/
+make run        # menu: elige modo y grupo de imagenes (data/imagenN)
+make clean      # borra binarios y salidas globales
 ```
+
+`make run` pregunta dos cosas y despacha solo:
+
+```
+que quieres hacer?
+  1) cortar y unir   (doy una imagen, la corta y la arma)
+  2) unir directo    (ya tengo las piezas, solo las arma)
+grupos disponibles:
+  1) data/imagen1
+  2) data/imagen2
+```
+
+Cada `data/imagenN/` es un ejemplo: adentro va su `imagen_referencia*` y su
+carpeta `pieces/`. La opción **cortar** parte de la referencia; la opción
+**unir directo** usa las piezas ya cortadas (tipo rompecabezas real). También se
+puede llamar a mano: `./build/generator data/imagenN` y `./build/solver data/imagenN`.
 
 ---
 
@@ -30,11 +45,11 @@ El corte es irregular pero sin piezas diminutas. Cuatro pasos:
 4. **Extracción + rotación** — cada celda se recorta de la imagen con canal alpha,
    se le aplica una **rotación aleatoria** y se guarda como PNG.
 
-Salidas del generador:
+Salidas del generador (dentro de la carpeta del ejemplo `data/imagenN/`):
 
-- `data/cut_preview.png` — la misma imagen con las líneas de corte dibujadas encima.
-- `data/pieces/1_piezas_cortadas/` — las N piezas tal como se cortaron.
-- `data/pieces/2_piezas_rotadas/` — las mismas piezas ya rotadas al azar
+- `cut_preview.png` — la misma imagen con las líneas de corte dibujadas encima.
+- `pieces/1_piezas_cortadas/` — las N piezas tal como se cortaron.
+- `pieces/2_piezas_rotadas/` — las mismas piezas ya rotadas al azar
   (es la entrada del solver) + `pieces.yml` y `ground_truth.yml`.
 
 ---
@@ -59,6 +74,12 @@ del paper, que son los que evitan cadenas de errores en zonas lisas:
   Si alguna costura es mala, se rechaza toda la colocación.
 - **Aceptación mutua** — se prefiere el par de aristas en el que cada una es la
   mejor opción de la otra (best-buddy), antes de aceptar cualquier otro.
+- **Relleno y reparación por energía global** (idea del MRF del paper) — al final,
+  las piezas sueltas se prueban por fuerza bruta donde cierren 2+ costuras
+  geométricas (el color solo desempata), y si el lugar está ocupado se intenta el
+  desalojo: se expulsa al ocupante, se rellena, y el cambio se queda **solo si baja
+  la energía global** del armado (costuras buenas restan, malas suman, sueltas
+  castigan). Es la versión con derecho a arrepentirse del greedy.
 
 La **textura (textones de Gabor)** entra como un descuento suave para *desempatar*
 y organizar candidatos; nunca decide sola (medido: usada como penalización dura
@@ -70,11 +91,11 @@ empeora el armado).
 
 Se producen dos vistas del mismo armado:
 
-- **Imagen unida por textones (`data/pieces/3_analisis_coloreo/`)** — cada pieza
-  pintada según sus texturas dominantes: zonas con textura parecida comparten
+- **Imagen unida por textones (`data/imagenN/pieces/3_analisis_coloreo/`)** — cada
+  pieza pintada según sus texturas dominantes: zonas con textura parecida comparten
   color, así que se ven "manchas" o formas de textura, no la foto. Esto es lo que
   *guía y organiza* el emparejamiento; **no es el resultado final**.
-- **Imagen unida normal (`data/resultado.png`)** — la foto real reconstruida,
+- **Imagen unida normal (`data/imagenN/resultado.png`)** — la foto real reconstruida,
   con las piezas rotadas y colocadas en su sitio. Sale en el **mismo tamaño y
   orientación** que la imagen de entrada (alineación Kabsch robusta contra el
   ground truth). Si hay metadatos también reporta la precisión (piezas bien

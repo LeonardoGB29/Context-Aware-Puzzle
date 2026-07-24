@@ -1,5 +1,3 @@
-// ensamblado.cpp — implementaciones
-
 #include "ensamblado.hpp"
 #include <algorithm>
 #include <cmath>
@@ -49,7 +47,22 @@ bool overlaps(vector<Piece>& pieces, int pb, float rot, Point2f pos) {
     return false;
 }
 
-SeamEval evalPlacement(vector<Piece>& pieces, int pb, float rot, Point2f pos) {
+bool boundsOK(vector<Piece>& pieces, int pb, float rot, Point2f pos) {
+    if (gRectW <= 0) return true;
+    float minx = 1e9f, miny = 1e9f, maxx = -1e9f, maxy = -1e9f;
+    for (int a = 0; a < (int)pieces.size(); ++a) {
+        if (a != pb && !pieces[a].placed) continue;
+        for (Point2f& v : pieces[a].poly) {
+            Point2f g = (a == pb) ? pos + rotP(v, rot) : xform(pieces[a], v);
+            minx = min(minx, g.x); maxx = max(maxx, g.x);
+            miny = min(miny, g.y); maxy = max(maxy, g.y);
+        }
+    }
+    float tol = 8.0f;
+    return (maxx - minx) <= gRectW + tol && (maxy - miny) <= gRectH + tol;
+}
+
+SeamEval evalPlacement(vector<Piece>& pieces, int pb, float rot, Point2f pos, bool gate) {
     SeamEval ev;
     float sum = 0;
     for (int a = 0; a < (int)pieces.size(); ++a) {
@@ -60,17 +73,238 @@ SeamEval evalPlacement(vector<Piece>& pieces, int pb, float rot, Point2f pos) {
                 Point2f f0 = pos + rotP(f.a, rot), f1 = pos + rotP(f.b, rot);
                 if (!coincide(e0, e1, f0, f1)) continue;
                 float c = matchCost(e, f);
-                if (c > gMatchThresh * SEAM_RELAX) return SeamEval{};
-                sum += c;
+                if (gate && c > gMatchThresh * SEAM_RELAX) return SeamEval{};
+                sum += isfinite(c) ? c : gMatchThresh;   // color solo para el promedio
                 ev.seams++;
             }
         }
     }
     if (ev.seams == 0) return ev;
     if (overlaps(pieces, pb, rot, pos)) return SeamEval{};
+    if (!boundsOK(pieces, pb, rot, pos)) return SeamEval{};
     ev.avg = sum / ev.seams;
     ev.ok = true;
     return ev;
+}
+
+float globalEnergy(vector<Piece>& pieces) {
+    float E = 0;
+    for (int a = 0; a < (int)pieces.size(); ++a) {
+        if (!pieces[a].placed) { E += gMatchThresh; continue; }
+        for (int b = a + 1; b < (int)pieces.size(); ++b) {
+            if (!pieces[b].placed) continue;
+            for (Edge& e : pieces[a].edges) {
+                if (e.isFrame) continue;
+                Point2f e0 = xform(pieces[a], e.a), e1 = xform(pieces[a], e.b);
+                for (Edge& f : pieces[b].edges) {
+                    if (f.isFrame) continue;
+                    Point2f f0 = xform(pieces[b], f.a), f1 = xform(pieces[b], f.b);
+                    if (coincide(e0, e1, f0, f1))
+                        E += stripCost(e, f) - gMatchThresh;
+                }
+            }
+        }
+    }
+    return E;
+}
+
+float placedAvgCost(vector<Piece>& pieces, int b) {
+    float sum = 0;
+    int n = 0;
+    for (int a = 0; a < (int)pieces.size(); ++a) {
+        if (!pieces[a].placed || a == b) continue;
+        for (Edge& e : pieces[a].edges) {
+            if (e.isFrame) continue;
+            Point2f e0 = xform(pieces[a], e.a), e1 = xform(pieces[a], e.b);
+            for (Edge& f : pieces[b].edges) {
+                if (f.isFrame) continue;
+                Point2f f0 = xform(pieces[b], f.a), f1 = xform(pieces[b], f.b);
+                if (coincide(e0, e1, f0, f1)) { sum += stripCost(e, f); n++; }
+            }
+        }
+    }
+    return n ? sum / n : -1.0f;
+}
+
+void removePiece(vector<Piece>& pieces, int pb) {
+    Piece& B = pieces[pb];
+    for (int a = 0; a < (int)pieces.size(); ++a) {
+        if (!pieces[a].placed || a == pb) continue;
+        for (Edge& e : pieces[a].edges) {
+            Point2f e0 = xform(pieces[a], e.a), e1 = xform(pieces[a], e.b);
+            for (Edge& f : B.edges) {
+                Point2f f0 = xform(B, f.a), f1 = xform(B, f.b);
+                if (coincide(e0, e1, f0, f1)) e.used = false;
+            }
+        }
+    }
+    B.placed = false;
+    for (Edge& f : B.edges) f.used = false;
+}
+
+bool repairWorst(vector<Piece>& pieces) {
+    // peor pieza colocada: costo medio de costura por encima del umbral
+    int worst = -1;
+    float worstAvg = gMatchThresh;
+    for (int b = 0; b < (int)pieces.size(); ++b) {
+        if (!pieces[b].placed) continue;
+        float avg = placedAvgCost(pieces, b);
+        if (avg > worstAvg) { worstAvg = avg; worst = b; }
+    }
+    if (worst < 0) return false;
+
+    float E0 = globalEnergy(pieces);
+    float oldRot = pieces[worst].rot;
+    Point2f oldPos = pieces[worst].pos;
+    removePiece(pieces, worst);
+
+    // mejor recolocacion con el resto fijo (color sin compuerta)
+    int bestSeams = 0;
+    float bestScore = numeric_limits<float>::infinity(), bestRot = 0;
+    Point2f bestPos;
+    for (int a = 0; a < (int)pieces.size(); ++a) {
+        if (!pieces[a].placed) continue;
+        for (int i = 0; i < (int)pieces[a].edges.size(); ++i) {
+            Edge& EA = pieces[a].edges[i];
+            if (EA.isFrame || EA.used) continue;
+            for (int j = 0; j < (int)pieces[worst].edges.size(); ++j) {
+                Edge& EB = pieces[worst].edges[j];
+                if (EB.isFrame) continue;
+                if (fabs(EA.len - EB.len) > max(4.0f, LEN_TOL * max(EA.len, EB.len))) continue;
+                Cand c{a, i, worst, j, 0};
+                float rot;
+                Point2f pos;
+                rigidOf(pieces, c, rot, pos);
+                refineRigid(pieces, worst, rot, pos);
+                if (!frameOK(pieces, worst, rot, pos)) continue;
+                SeamEval ev = evalPlacement(pieces, worst, rot, pos, false);
+                if (!ev.ok) continue;
+                float score = ev.avg / (1.0f + 0.25f * (ev.seams - 1));
+                if (score < bestScore) {
+                    bestScore = score; bestSeams = ev.seams;
+                    bestRot = rot; bestPos = pos;
+                }
+            }
+        }
+    }
+    if (bestSeams > 0) {
+        placeAt(pieces, worst, bestRot, bestPos);
+        if (globalEnergy(pieces) < E0 - 1e-3f) return true;   // solo si mejora global
+        removePiece(pieces, worst);
+    }
+    placeAt(pieces, worst, oldRot, oldPos);   // volver como estaba
+    return false;
+}
+
+vector<Pose> savePoses(vector<Piece>& pieces) {
+    vector<Pose> st;
+    for (Piece& p : pieces) {
+        Pose s;
+        s.placed = p.placed ? 1 : 0;
+        s.rot = p.rot;
+        s.pos = p.pos;
+        for (Edge& e : p.edges) s.used.push_back(e.used ? 1 : 0);
+        st.push_back(s);
+    }
+    return st;
+}
+
+void restorePoses(vector<Piece>& pieces, vector<Pose>& st) {
+    for (int i = 0; i < (int)pieces.size(); ++i) {
+        pieces[i].placed = st[i].placed != 0;
+        pieces[i].rot = st[i].rot;
+        pieces[i].pos = st[i].pos;
+        for (int j = 0; j < (int)pieces[i].edges.size(); ++j)
+            pieces[i].edges[j].used = st[i].used[j] != 0;
+    }
+}
+
+bool evictAndFill(vector<Piece>& pieces) {
+    float E0 = globalEnergy(pieces);
+    vector<Pose> snap = savePoses(pieces);
+
+    for (int u = 0; u < (int)pieces.size(); ++u) {
+        if (pieces[u].placed) continue;
+        // pose candidata desde cualquier arista colocada, aunque este usada
+        for (int a = 0; a < (int)pieces.size(); ++a) {
+            if (!pieces[a].placed || a == u) continue;
+            for (int i = 0; i < (int)pieces[a].edges.size(); ++i) {
+                Edge& EA = pieces[a].edges[i];
+                if (EA.isFrame) continue;
+                for (int j = 0; j < (int)pieces[u].edges.size(); ++j) {
+                    Edge& EB = pieces[u].edges[j];
+                    if (fabs(EA.len - EB.len) > max(4.0f, LEN_TOL * max(EA.len, EB.len))) continue;
+                    Cand c{a, i, u, j, 0};
+                    float rot;
+                    Point2f pos;
+                    rigidOf(pieces, c, rot, pos);
+                    if (!frameOK(pieces, u, rot, pos)) continue;
+
+                    // ocupantes: piezas colocadas que se solapan con esa pose
+                    vector<Point2f> gu;
+                    for (Point2f& v : pieces[u].poly) gu.push_back(pos + rotP(v, rot));
+                    int victim = -1, nvic = 0;
+                    for (int b = 0; b < (int)pieces.size() && nvic < 2; ++b) {
+                        if (!pieces[b].placed || b == u) continue;
+                        vector<Point2f> gb;
+                        for (Point2f& v : pieces[b].poly) gb.push_back(xform(pieces[b], v));
+                        vector<Point2f> inter;
+                        float area = cv::intersectConvexConvex(gu, gb, inter, true);
+                        if (area > 0.05f * min(pieces[u].area, pieces[b].area)) { victim = b; nvic++; }
+                    }
+                    if (nvic != 1) continue;   // solo desalojo simple
+
+                    removePiece(pieces, victim);
+                    refineRigid(pieces, u, rot, pos);
+                    SeamEval ev = evalPlacement(pieces, u, rot, pos, false);
+                    if (!ev.ok || ev.seams < 2) { restorePoses(pieces, snap); continue; }
+                    placeAt(pieces, u, rot, pos);
+                    while (fillHole(pieces)) {}   // la victima puede reubicarse
+                    if (globalEnergy(pieces) < E0 - 1e-3f) return true;
+                    restorePoses(pieces, snap);   // no mejoro: deshacer todo
+                }
+            }
+        }
+    }
+    return false;
+}
+
+// fuerza bruta: cada pieza suelta contra cada arista abierta; gana la que cierra
+// mas costuras geometricamente (color desempata). No usa la compuerta de color.
+bool fillHole(vector<Piece>& pieces) {
+    int bestB = -1, bestSeams = 0;
+    float bestColor = numeric_limits<float>::infinity(), bestRot = 0;
+    Point2f bestPos;
+    for (int b = 0; b < (int)pieces.size(); ++b) {
+        if (pieces[b].placed) continue;
+        for (int a = 0; a < (int)pieces.size(); ++a) {
+            if (!pieces[a].placed) continue;
+            for (int i = 0; i < (int)pieces[a].edges.size(); ++i) {
+                Edge& EA = pieces[a].edges[i];
+                if (EA.isFrame || EA.used) continue;
+                for (int j = 0; j < (int)pieces[b].edges.size(); ++j) {
+                    Edge& EB = pieces[b].edges[j];
+                    if (fabs(EA.len - EB.len) > max(4.0f, LEN_TOL * max(EA.len, EB.len))) continue;
+                    Cand c{a, i, b, j, 0};
+                    float rot;
+                    Point2f pos;
+                    rigidOf(pieces, c, rot, pos);
+                    refineRigid(pieces, b, rot, pos);
+                    if (!frameOK(pieces, b, rot, pos)) continue;
+                    SeamEval ev = evalPlacement(pieces, b, rot, pos, false);
+                    if (!ev.ok || ev.seams < 2) continue;   // hueco real: 2+ lados
+                    if (ev.seams > bestSeams ||
+                        (ev.seams == bestSeams && ev.avg < bestColor)) {
+                        bestSeams = ev.seams; bestColor = ev.avg;
+                        bestB = b; bestRot = rot; bestPos = pos;
+                    }
+                }
+            }
+        }
+    }
+    if (bestB < 0) return false;
+    placeAt(pieces, bestB, bestRot, bestPos);
+    return true;
 }
 
 bool frameOK(vector<Piece>& pieces, int pb, float rot, Point2f pos) {
@@ -214,7 +448,7 @@ bool placeNext(vector<Piece>& pieces, bool borderOnly) {
             rigidOf(pieces, cands[k], rot, pos);
             refineRigid(pieces, cands[k].pb, rot, pos);
             if (!frameOK(pieces, cands[k].pb, rot, pos)) continue;
-            SeamEval ev = evalPlacement(pieces, cands[k].pb, rot, pos);
+            SeamEval ev = evalPlacement(pieces, cands[k].pb, rot, pos, true);
             if (!ev.ok || ev.seams < ps.minSeams) continue;
             float score = ev.avg
                           * texFactor(pieces[cands[k].pa].edges[cands[k].ea],
@@ -237,6 +471,7 @@ bool placeNext(vector<Piece>& pieces, bool borderOnly) {
             refineRigid(pieces, cands[k].pb, rot, pos);
             if (!frameOK(pieces, cands[k].pb, rot, pos)) continue;
             if (overlaps(pieces, cands[k].pb, rot, pos)) continue;
+            if (!boundsOK(pieces, cands[k].pb, rot, pos)) continue;
             bestK = k; bestRot = rot; bestPos = pos;
             break;
         }
@@ -259,7 +494,21 @@ void assemble(vector<Piece>& pieces, int seed) {
 
     while (placeNext(pieces, /*borderonly=*/false)) {}
 
+    int greedy = 0;
+    for (Piece& p : pieces) greedy += p.placed;
+
+    while (fillHole(pieces)) {}   // fuerza bruta sobre las que quedaron sueltas
+
+    int rep = 0;                  // descenso de energia global (idea mrf del paper)
+    while (rep < 8 && (repairWorst(pieces) || evictAndFill(pieces))) {
+        rep++;
+        while (fillHole(pieces)) {}
+    }
+    if (rep) cout << "reparacion por energia: " << rep << " movimientos\n";
+
     int placed = 0;
     for (Piece& p : pieces) placed += p.placed;
+    if (placed > greedy)
+        cout << "relleno de huecos: +" << (placed - greedy) << " por geometria\n";
     cout << "piezas colocadas: " << placed << " / " << (int)pieces.size() << "\n";
 }

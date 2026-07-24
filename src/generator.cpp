@@ -140,30 +140,22 @@ cv::Mat syntheticImage(int W = 800, int H = 600) {
 
 cv::Mat loadInput(string& dataDir, string& path) {
     if (path.empty()) path = findInputImage(dataDir);
-    if (path.empty()) {
-        cv::Mat img = syntheticImage();
-        path = dataDir + "/input.png";
-        cv::imwrite(path, img);
-        cout << "no habia imagen en data/. cree una sintetica: " << path << "\n";
-        return img;
-    }
     return cv::imread(path, cv::IMREAD_COLOR);
 }
 
 int main(int argc, char** argv) {
-    string dataDir = "data";
-    string piecesDir = dataDir + "/pieces";
+    string baseDir = (argc > 1) ? argv[1] : "data";   // carpeta del ejemplo (data/imagenN)
+    float r = (argc > 2) ? stof(argv[2]) : 90.0f;
+    string piecesDir = baseDir + "/pieces";
     string dir1 = piecesDir + "/1_piezas_cortadas";
     string dir2 = piecesDir + "/2_piezas_rotadas";
-    cv::utils::fs::createDirectory(dataDir);
+    cv::utils::fs::createDirectory(baseDir);
     cv::utils::fs::createDirectory(piecesDir);
     cv::utils::fs::createDirectory(dir1);
     cv::utils::fs::createDirectory(dir2);
 
-    string imgPath = (argc > 1) ? argv[1] : "";
-    float r = (argc > 2) ? stof(argv[2]) : 90.0f;
-
-    cv::Mat img = loadInput(dataDir, imgPath);
+    string imgPath = "";   // se busca la imagen de referencia dentro de baseDir
+    cv::Mat img = loadInput(baseDir, imgPath);
     if (img.empty()) {
         cerr << "no pude cargar la imagen: " << imgPath << "\n";
         return 1;
@@ -180,14 +172,14 @@ int main(int argc, char** argv) {
 
     cv::Mat preview = img.clone();
     vector<RawPiece> pieces = buildPieces(img, facets, preview);
-    cv::imwrite(dataDir + "/cut_preview.png", preview);
+    cv::imwrite(baseDir + "/cut_preview.png", preview);
     shufflePieces(pieces, rng);
     writePieces(dir1, dir2, pieces, img.cols, img.rows, rng);
 
     cout << "piezas generadas: " << (int)pieces.size() << "\n"
-         << "  " << dataDir << "/cut_preview.png\n"
+         << "  " << baseDir << "/cut_preview.png\n"
          << "  " << dir1 << "/  (piezas sin rotar)\n"
          << "  " << dir2 << "/  (piezas rotadas + pieces.yml + ground_truth.yml)\n"
-         << "ahora corre:  ./build/solver\n";
+         << "ahora corre:  ./build/solver " << baseDir << "\n";
     return 0;
 }

@@ -1,5 +1,3 @@
-// gabor.hpp — textura por textones (declaraciones)
-
 #pragma once
 #include <opencv2/opencv.hpp>
 #include <vector>
@@ -22,6 +20,9 @@ vector<cv::Mat> responses(cv::Mat& bgra, vector<cv::Mat>& bank, double sigma);
 cv::Mat collectSamples(vector<cv::Mat>& imgs, vector<cv::Mat>& bank, double sigma);
 
 cv::Mat trainTextons(const cv::Mat& samples, int k);
+
+// elige K por metodo del codo entre kmin y kmax (adaptativo al contenido)
+int chooseK(const cv::Mat& samples, int kmin, int kmax);
 
 cv::Mat textonMap(cv::Mat& bgra, vector<cv::Mat>& bank,
                   cv::Mat& centers, double sigma);

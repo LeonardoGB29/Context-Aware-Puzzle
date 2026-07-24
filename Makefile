@@ -1,7 +1,7 @@
 # Makefile — rompecabezas_grafica
 # make        compila generator y solver
-# make run    compila y corre el pipeline (generator -> solver)
-# make clean  borra binarios, data/pieces/ y las imagenes generadas
+# make run    compila y abre el menu (cortar+unir o solo unir) sobre data/imagenN
+# make clean  borra binarios y salidas globales
 
 CXX      := c++
 CXXFLAGS := -std=c++17 -O2 -Wall $(shell pkg-config --cflags opencv4)
@@ -35,8 +35,7 @@ $(BIN):
 	@mkdir -p $(BIN)
 
 run: all
-	./$(BIN)/generator
-	./$(BIN)/solver
+	@bash run.sh
 
 clean:
 	rm -rf $(BIN)

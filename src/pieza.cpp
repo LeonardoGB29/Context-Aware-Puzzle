@@ -1,5 +1,3 @@
-// pieza.cpp — variables globales e implementaciones
-
 #include "pieza.hpp"
 #include <opencv2/core/utils/filesystem.hpp>
 #include <iostream>
@@ -118,7 +116,9 @@ void buildEdges(Piece& p, vector<Point2f>& poly, const vector<int>& frame) {
 vector<Piece> loadPieces(string& dir, int& imgW, int& imgH, bool& modeA) {
     vector<Piece> pieces;
     if (!cv::utils::fs::exists(dir)) return pieces;
-    cv::FileStorage fs(dir + "/pieces.yml", cv::FileStorage::READ);
+    cv::FileStorage fs;
+    if (cv::utils::fs::exists(dir + "/pieces.yml"))
+        fs.open(dir + "/pieces.yml", cv::FileStorage::READ);
     modeA = fs.isOpened();
 
     if (modeA) {
@@ -144,7 +144,7 @@ vector<Piece> loadPieces(string& dir, int& imgW, int& imgH, bool& modeA) {
     } else {
         imgW = imgH = 0;
         vector<cv::String> files;
-        cv::glob(dir + "/piece_*.png", files, false);
+        cv::glob(dir + "/*.png", files, false);
         for (int i = 0; i < (int)files.size(); ++i) {
             Piece p;
             p.id = i;
@@ -161,12 +161,40 @@ vector<Piece> loadPieces(string& dir, int& imgW, int& imgH, bool& modeA) {
 }
 
 bool loadGroundTruth(string& dir, vector<Piece>& pieces) {
+    if (!cv::utils::fs::exists(dir + "/ground_truth.yml")) return false;
     cv::FileStorage fs(dir + "/ground_truth.yml", cv::FileStorage::READ);
     if (!fs.isOpened()) return false;
     for (const cv::FileNode& n : fs["pieces"]) {
         int id = (int)n["id"];
         for (Piece& p : pieces)
             if (p.id == id) p.gtC = Point2f((float)n["cx"], (float)n["cy"]);
+    }
+    return true;
+}
+
+void countPartners(vector<Piece>& pieces) {
+    for (Piece& p : pieces)
+        for (Edge& e : p.edges) e.partners = 0;
+    for (int a = 0; a < (int)pieces.size(); ++a)
+        for (int b = a + 1; b < (int)pieces.size(); ++b)
+            for (Edge& e : pieces[a].edges)
+                for (Edge& f : pieces[b].edges)
+                    if (matchCost(e, f) < gMatchThresh) { e.partners++; f.partners++; }
+}
+
+bool detectFrame(vector<Piece>& pieces) {
+    int total = 0, solas = 0;
+    for (Piece& p : pieces)
+        for (Edge& e : p.edges) { total++; if (e.partners == 0) solas++; }
+    // si marca demasiadas no es marco sino ambiguedad: mejor no tocar nada
+    if (solas == 0 || solas > total / 3) return false;
+
+    for (Piece& p : pieces) {
+        p.frameCount = 0;
+        for (Edge& e : p.edges) {
+            e.isFrame = (e.partners == 0);
+            if (e.isFrame) p.frameCount++;
+        }
     }
     return true;
 }
@@ -179,13 +207,14 @@ void classifyByTexture(vector<Piece>& pieces) {
     // el contexto primero: kmeans usa el rng global y el orden cambia los centros
     cv::Mat ctxCenters = gabor::trainTextons(
         gabor::collectSamples(imgs, bank, 0), N_TEX_CTX);
-    cv::Mat visCenters = gabor::trainTextons(
-        gabor::collectSamples(imgs, bank, gabor::SMOOTH_SIGMA), N_TEX_VIS);
+    // vis va despues (su kmeans no debe alterar el ctx del matching); K adaptativo
+    cv::Mat visSamples = gabor::collectSamples(imgs, bank, gabor::SMOOTH_SIGMA);
+    cv::Mat visCenters = gabor::trainTextons(visSamples, gabor::chooseK(visSamples, 3, N_TEX_VIS));
     int kv = visCenters.rows, kc = ctxCenters.rows;
 
     for (Piece& p : pieces) {
         p.texMap = gabor::majorityFilter(
-            gabor::textonMap(p.img, bank, visCenters, gabor::SMOOTH_SIGMA), kv, 4, 2);
+            gabor::textonMap(p.img, bank, visCenters, gabor::SMOOTH_SIGMA), kv, 6, 3);
         cv::Mat ctxMap = gabor::textonMap(p.img, bank, ctxCenters, 0);
         p.tex = gabor::histogram(ctxMap, kc);
         for (Edge& e : p.edges) {

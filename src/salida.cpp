@@ -1,5 +1,3 @@
-// salida.cpp — implementaciones
-
 #include "salida.hpp"
 #include <algorithm>
 #include <cmath>
@@ -53,7 +51,7 @@ Align alignToGT(vector<Piece>& pieces, bool hasGT) {
     return al;
 }
 
-cv::Mat render(vector<Piece>& pieces, Align& al, int imgW, int imgH) {
+cv::Mat render(vector<Piece>& pieces, Align& al, int imgW, int imgH, bool coloreo) {
     Point2f shift(0, 0);
     int W, H;
     if (al.ok && imgW > 0) {
@@ -69,9 +67,16 @@ cv::Mat render(vector<Piece>& pieces, Align& al, int imgW, int imgH) {
                 miny = min(miny, g.y); maxy = max(maxy, g.y);
             }
         }
-        W = (int)ceil(maxx - minx) + 2;
-        H = (int)ceil(maxy - miny) + 2;
-        shift = Point2f(minx, miny);
+        if (imgW > 0) {   // lienzo conocido sin gt: centrar el armado en el
+            W = imgW;
+            H = imgH;
+            shift = Point2f(minx - (W - (maxx - minx)) * 0.5f,
+                            miny - (H - (maxy - miny)) * 0.5f);
+        } else {
+            W = (int)ceil(maxx - minx) + 2;
+            H = (int)ceil(maxy - miny) + 2;
+            shift = Point2f(minx, miny);
+        }
     }
     cv::Mat canvas = cv::Mat::zeros(H, W, CV_8UC3);
     bool useAlign = al.ok && imgW > 0;
@@ -101,7 +106,13 @@ cv::Mat render(vector<Piece>& pieces, Align& al, int imgW, int imgH) {
                 if (ix < 0 || iy < 0 || ix >= p.img.cols || iy >= p.img.rows) continue;
                 cv::Vec4b s = p.img.at<cv::Vec4b>(iy, ix);
                 if (s[3] < 64) continue;
-                canvas.at<cv::Vec3b>(y, x) = cv::Vec3b(s[0], s[1], s[2]);
+                cv::Vec3b col(s[0], s[1], s[2]);
+                if (coloreo) {
+                    int t = p.texMap.at<int>(iy, ix);
+                    if (t < 0) continue;
+                    col = PALETTE[t % 12];
+                }
+                canvas.at<cv::Vec3b>(y, x) = col;
             }
     }
     return canvas;
@@ -119,6 +130,21 @@ void reportAccuracy(vector<Piece>& pieces, Align& al) {
         if (cv::norm(applyAlign(al, xform(p, p.centroid)) - p.gtC) < PLACE_TOL) correct++;
     }
     cout << "precision (bien ubicadas): " << correct << " / " << total << "\n";
+}
+
+void reportPairing(vector<Piece>& pieces) {
+    int sueltas = 0, sinPareja = 0;
+    for (Piece& p : pieces) {
+        if (!p.placed) { sueltas++; continue; }
+        for (Edge& e : p.edges)
+            if (!e.isFrame && !e.used) sinPareja++;
+    }
+    if (sueltas == 0 && sinPareja == 0) {
+        cout << "consistencia: ok, todas las caras interiores emparejadas\n";
+        return;
+    }
+    cout << "consistencia: " << sinPareja << " caras interiores sin pareja, "
+         << sueltas << " piezas sueltas\n";
 }
 
 void writeAnalysis(vector<Piece>& pieces, string& dir) {

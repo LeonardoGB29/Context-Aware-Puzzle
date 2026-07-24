@@ -1,5 +1,3 @@
-// pieza.hpp — modelo de la pieza: parametros, structs y declaraciones
-
 #pragma once
 #include <opencv2/opencv.hpp>
 #include "geometria.hpp"
@@ -15,7 +13,7 @@ const int    K_SAMPLES    = 16;     // muestras de color por arista
 const float  INSET_PX     = 2.5f;   // profundidad de la tira desde la arista
 const float  LEN_TOL      = 0.10f;  // tolerancia de longitud entre aristas
 const float  MATCH_THRESH = 45.0f;  // costo de color maximo aceptable
-const int    N_TEX_VIS    = 6;      // textones para visualizar
+const int    N_TEX_VIS    = 5;      // maximo de textones para visualizar (K adaptativo 3..5)
 const int    N_TEX_CTX    = 12;     // textones para el contexto del matching
 const float  BAND_PX      = 12.0f;  // ancho de la banda de contexto
 const float  TEX_TAU      = 0.15f;  // offset del descuento de contexto
@@ -33,6 +31,7 @@ struct Edge {
     float   len = 0;
     bool    isFrame = false;     // arista sobre el marco
     bool    used = false;        // ya cosida
+    int     partners = 0;        // parejas compatibles en el resto del rompecabezas
     vector<Vec3f> strip;         // tira de color interior
     vector<float> band;          // histograma de textones de su banda
 };
@@ -74,3 +73,9 @@ vector<Piece> loadPieces(string& dir, int& imgW, int& imgH, bool& modeA);
 bool loadGroundTruth(string& dir, vector<Piece>& pieces);
 
 void classifyByTexture(vector<Piece>& pieces);
+
+// cuenta, por cara, cuantas parejas compatibles tiene en el resto del rompecabezas
+void countPartners(vector<Piece>& pieces);
+
+// una cara sin ninguna pareja posible apunta a la nada: es marco (solo modo b)
+bool detectFrame(vector<Piece>& pieces);

@@ -1,5 +1,3 @@
-// gabor.cpp — implementaciones
-
 #include "gabor.hpp"
 #include <algorithm>
 #include <cmath>
@@ -82,6 +80,22 @@ cv::Mat trainTextons(const cv::Mat& samples, int k) {
                cv::TermCriteria(cv::TermCriteria::EPS + cv::TermCriteria::MAX_ITER, 15, 1.0),
                2, cv::KMEANS_PP_CENTERS, centers);
     return centers.clone();
+}
+
+int chooseK(const cv::Mat& samples, int kmin, int kmax) {
+    int n = samples.rows;
+    if (n <= kmin) return max(1, n);
+    if (kmax > n) kmax = n;
+    cv::TermCriteria term(cv::TermCriteria::EPS + cv::TermCriteria::MAX_ITER, 15, 1.0);
+    double prev = -1;
+    for (int k = kmin; k <= kmax; ++k) {
+        cv::Mat labels, centers;
+        double comp = cv::kmeans(samples, k, labels, term, 1, cv::KMEANS_PP_CENTERS, centers);
+        // mejora relativa al sumar un color; si ya casi no baja, el codo fue k-1
+        if (prev >= 0 && (prev - comp) / (prev + 1e-9) < 0.12) return k - 1;
+        prev = comp;
+    }
+    return kmax;
 }
 
 cv::Mat textonMap(cv::Mat& bgra, vector<cv::Mat>& bank,

@@ -1,5 +1,3 @@
-// geometria.hpp — geometria compartida por generator y solver (declaraciones)
-
 #pragma once
 #include <opencv2/opencv.hpp>
 #include <vector>
